@@ -61,6 +61,32 @@ canbus:
     tx_queue_len: 5 # default is 5 I believe - 1 should make it drop extras?? 
     rx_queue_len: 5
     on_frame:
+      - can_id: 0x132 # BMS_hvBusStatus
+        then:
+          - logger.log:
+              level: INFO
+              format: "0x132_BMS_hvBusStatus: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
+              args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
+
+          - lambda: |-
+              float BMS_packVoltage = ((x[1] << 8) | x[0]) * 0.01;                       //BMS_packVoltage: 0|16@1+ (0.01,0) [0|0] "V" X
+              ESP_LOGI("canbus", "BMS_packVoltage: %.02fV", BMS_packVoltage);
+              id(bms_packvoltage).publish_state(BMS_packVoltage);
+
+              float BMS_packCurrent = int16_t((x[3] << 8) | x[2]);                       //BMS_packCurrent: 16|15@1- (-0.1,0) [0|0] "A" X             @1- means signed value = needs to be cast as int16_t
+              BMS_packCurrent = BMS_packCurrent * -0.1;
+              ESP_LOGI("canbus", "BMS_packCurrent: %.02fA", BMS_packCurrent);
+              id(bms_packcurrent).publish_state(BMS_packCurrent);
+
+              float BMS_currentUnfiltered = int16_t(((x[5] << 8) | x[4]));               //BMS_currentUnfiltered: 32|16@1- (-0.05,822) [0|0] "A" X       822 is offset needs to be added to value
+              BMS_currentUnfiltered = (BMS_currentUnfiltered * -0.05) + 822;
+              ESP_LOGI("canbus", "BMS_)currentUnfiltered: %.02fA", BMS_currentUnfiltered);
+              id(bms_currentunfiltered).publish_state(BMS_currentUnfiltered);
+
+              float BMS_chgTimeToFull = (((x[7] & 0x0F) << 8) | x[6]) * 0.0166667;      //BMS_chgTimeToFull: 48|12@1+ (0.0166667,0) [0|0] "Hours" X
+              ESP_LOGI("canbus", "BMS_chgTimeToFull: %.02fh", BMS_chgTimeToFull);
+              id(bms_chgtimetofull).publish_state(BMS_chgTimeToFull);
+
       - can_id: 0x292 # BMS_socStatus
         then:
           - logger.log:
@@ -69,25 +95,24 @@ canbus:
               args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
 
           - lambda: |-
-
-              float BMS_socMin = (((x[1] & 0x03) << 8) | x[0]) / 10;
+              float BMS_socMin = (((x[1] & 0x03) << 8) | x[0]) / 10;                     //BMS_socMin: 0|10@1+ (0.1,0) [0|0] "%" X
               ESP_LOGI("canbus", "BMS_socMin: %.02f%%", BMS_socMin);
               id(bms_socmin).publish_state(BMS_socMin);
 
-              float BMS_socUI = ((x[2] & 0x0F) << 6) | ((x[1] & 0xFC) >> 2); // decode
+              float BMS_socUI = ((x[2] & 0x0F) << 6) | ((x[1] & 0xFC) >> 2);            //BMS_socUI: 10|10@1+ (0.1,0) [0|0] "%" X
               BMS_socUI = BMS_socUI / 10; // scale
               ESP_LOGI("canbus", "BMS_socUI: %.02f%%", BMS_socUI);
               id(bms_socui).publish_state(BMS_socUI);
 
-              float BMS_socMax = (((x[3] & 0x3F) << 4) | ((x[2] & 0xF0) >> 4)) / 10; 
+              float BMS_socMax = (((x[3] & 0x3F) << 4) | ((x[2] & 0xF0) >> 4)) / 10;    //BMS_socMax: 20|10@1+ (0.1,0) [0|0] "%" X
               ESP_LOGI("canbus", "BMS_socMax: %.02f%%", BMS_socMax);
               id(bms_socmax).publish_state(BMS_socMax);
 
-              float BMS_socAvg = ((x[4] << 2) | ((x[3] & 0xC0) >> 6)) / 10;
+              float BMS_socAvg = ((x[4] << 2) | ((x[3] & 0xC0) >> 6)) / 10;             //BMS_socAvg: 30|10@1+ (0.1,0) [0|0] "%" X
               ESP_LOGI("canbus", "BMS_socAvg: %.02f%%", BMS_socAvg);
               id(bms_socavg).publish_state(BMS_socAvg);
 
-              float BMS_initialFullPackEnergy = (((x[6] & 0x03) << 8) | x[5]) / 10;
+              float BMS_initialFullPackEnergy = (((x[6] & 0x03) << 8) | x[5]) / 10;     //BMS_initialFullPackEnergy: 40|10@1+ (0.1,0) [0|102.3] "kWh" X
               ESP_LOGI("canbus", "BMS_socAvg: %.02fkWh", BMS_initialFullPackEnergy);
               id(bms_initialfullpackenergy).publish_state(BMS_initialFullPackEnergy);
 
@@ -142,6 +167,41 @@ sensor:
     accuracy_decimals: 2
     device_class: energy
     unit_of_measurement: "kWh"
+
+  - platform: template
+    name: BMS_packVoltage
+    id: bms_packvoltage
+    accuracy_decimals: 2
+    device_class: voltage
+    unit_of_measurement: "V"
+    filters:
+      - throttle_average: 1s
+
+  - platform: template
+    name: BMS_packCurrent
+    id: bms_packcurrent
+    accuracy_decimals: 2
+    device_class: current
+    unit_of_measurement: "A"    
+    filters:
+      - throttle_average: 1s
+
+  - platform: template
+    name: BMS_currentUnfiltered
+    id: bms_currentunfiltered
+    accuracy_decimals: 2
+    device_class: current
+    unit_of_measurement: "A"        
+    filters:
+      - throttle_average: 1s
+
+  - platform: template
+    name: BMS_chgTimeToFull
+    id: bms_chgtimetofull
+    accuracy_decimals: 2
+    unit_of_measurement: "h"  
+    filters:
+      - throttle_average: 1s
   
 light:
   - platform: esp32_rmt_led_strip # ESP32 S3 Atom Builtin RGB LED
