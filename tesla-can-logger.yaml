@@ -1,0 +1,165 @@
+esphome:
+  name: tesla-can-logger
+  friendly_name: tesla CAN Logger
+  comment: "ESP32 S3 Atom + Atomic CAN Base"
+  platformio_options:
+    board_build.flash_mode: dio # Standard uses a single line for data, Dual IO uses 2 lines for data (prevent reboot loop)
+  on_boot:
+    then:
+    - light.turn_on:
+        id: rgb_builtin
+        brightness: 50%
+        red: 0%
+        green: 100%
+        blue: 0%
+        effect: slow_pulse
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: DEBUG
+  logs:
+#    sensor: DEBUG
+#    text_sensor: DEBUG
+#    button: DEBUG
+#    number: DEBUG
+#    component: ERROR
+     #component: VERBOSE
+     light.addressable: DEBUG
+     scheduler: DEBUG
+     wifi: DEBUG
+     light: DEBUG
+     esp32_rmt_led_strip: DEBUG
+     esp32.preferences: DEBUG
+     canbus: INFO
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password_can
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+canbus:
+  - platform: esp32_can
+    tx_pin: GPIO5
+    rx_pin: GPIO6
+    can_id: 4
+    bit_rate: 500kbps
+    tx_queue_len: 5 # default is 5 I believe - 1 should make it drop extras?? 
+    rx_queue_len: 5
+    on_frame:
+      - can_id: 0x292 # BMS_socStatus
+        then:
+          - logger.log:
+              level: INFO
+              format: "0x292_BMS_socStatus: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
+              args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
+
+          - lambda: |-
+
+              float BMS_socMin = (((x[1] & 0x03) << 8) | x[0]) / 10;
+              ESP_LOGI("canbus", "BMS_socMin: %.02f%%", BMS_socMin);
+              id(bms_socmin).publish_state(BMS_socMin);
+
+              float BMS_socUI = ((x[2] & 0x0F) << 6) | ((x[1] & 0xFC) >> 2); // decode
+              BMS_socUI = BMS_socUI / 10; // scale
+              ESP_LOGI("canbus", "BMS_socUI: %.02f%%", BMS_socUI);
+              id(bms_socui).publish_state(BMS_socUI);
+
+              float BMS_socMax = (((x[3] & 0x3F) << 4) | ((x[2] & 0xF0) >> 4)) / 10; 
+              ESP_LOGI("canbus", "BMS_socMax: %.02f%%", BMS_socMax);
+              id(bms_socmax).publish_state(BMS_socMax);
+
+              float BMS_socAvg = ((x[4] << 2) | ((x[3] & 0xC0) >> 6)) / 10;
+              ESP_LOGI("canbus", "BMS_socAvg: %.02f%%", BMS_socAvg);
+              id(bms_socavg).publish_state(BMS_socAvg);
+
+              float BMS_initialFullPackEnergy = (((x[6] & 0x03) << 8) | x[5]) / 10;
+              ESP_LOGI("canbus", "BMS_socAvg: %.02fkWh", BMS_initialFullPackEnergy);
+              id(bms_initialfullpackenergy).publish_state(BMS_initialFullPackEnergy);
+
+#      - can_id: 0  # listen to all messages
+#        can_id_mask: 0
+#        then:
+#          - logger.log:
+#              level: INFO
+#              format: "CAN ID: 0x%03x Data: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
+#              args: [ '(uint)can_id', '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ] # x starts with the highest byte
+
+#          - lambda: |-
+#              ESP_LOGD("canbus", "can_id: 0x%03x, length: %d, content: %s", can_id, x.size(), format_hex_pretty(x).c_str());
+
+text_sensor:
+  - platform: template
+    name: "CAN Logging CSV"
+    id: txt_can_logging
+
+sensor:
+  - platform: template
+    name: BMS_socUI
+    id: bms_socui
+    accuracy_decimals: 2
+    device_class: battery
+    unit_of_measurement: "%"
+
+  - platform: template
+    name: BMS_socMin
+    id: bms_socmin
+    accuracy_decimals: 2
+    device_class: battery
+    unit_of_measurement: "%"
+
+  - platform: template
+    name: BMS_socMax
+    id: bms_socmax
+    accuracy_decimals: 2
+    device_class: battery
+    unit_of_measurement: "%"
+
+  - platform: template
+    name: BMS_socAvg
+    id: bms_socavg
+    accuracy_decimals: 2
+    device_class: battery
+    unit_of_measurement: "%"
+
+  - platform: template
+    name: BMS_initialFullPackEnergy
+    id: bms_initialfullpackenergy
+    accuracy_decimals: 2
+    device_class: energy
+    unit_of_measurement: "kWh"
+  
+light:
+  - platform: esp32_rmt_led_strip # ESP32 S3 Atom Builtin RGB LED
+    rgb_order: GRB
+    pin: GPIO35
+    num_leds: 1
+    rmt_channel: 0
+    chipset: ws2812
+    id: rgb_builtin
+    internal: true
+    restore_mode: ALWAYS_ON
+    entity_category: config
+    effects:
+      - pulse:
+          name: "slow_pulse" # The name of the effect. Defaults to Pulse.
+          min_brightness: 0%
+          max_brightness: 90%
+          transition_length:      # defaults to 1s
+            on_length: 2s
+            off_length: 2s
+          update_interval: 4s # The interval when the new transition is started. Defaults to 1s.
