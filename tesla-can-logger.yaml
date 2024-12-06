@@ -1,11 +1,17 @@
+# DBC from here https://github.com/onyx-m2/onyx-m2-dbc/blob/main/tesla_model3.dbc
+
 esphome:
-  name: tesla-can-logger
-  friendly_name: tesla CAN Logger
+  name: bms-0
+  friendly_name: bms_0
   comment: "ESP32 S3 Atom + Atomic CAN Base"
   platformio_options:
     board_build.flash_mode: dio # Standard uses a single line for data, Dual IO uses 2 lines for data (prevent reboot loop)
   on_boot:
     then:
+    - lambda: |-
+        std::vector<sensor::Sensor*> v = {id(cell_v_0), id(cell_v_1), id(cell_v_2), id(cell_v_3), id(cell_v_4), id(cell_v_5), id(cell_v_6), id(cell_v_7), id(cell_v_8), id(cell_v_9), id(cell_v_10), id(cell_v_11), id(cell_v_12), id(cell_v_13), id(cell_v_14), id(cell_v_15), id(cell_v_16), id(cell_v_17), id(cell_v_18), id(cell_v_19), id(cell_v_20), id(cell_v_21), id(cell_v_22), id(cell_v_23), id(cell_v_24), id(cell_v_25), id(cell_v_26), id(cell_v_27), id(cell_v_28), id(cell_v_29), id(cell_v_30), id(cell_v_31), id(cell_v_32), id(cell_v_33), id(cell_v_34), id(cell_v_35), id(cell_v_36), id(cell_v_37), id(cell_v_38), id(cell_v_39), id(cell_v_40), id(cell_v_41), id(cell_v_42), id(cell_v_43), id(cell_v_44), id(cell_v_45), id(cell_v_46), id(cell_v_47), id(cell_v_48), id(cell_v_49), id(cell_v_50), id(cell_v_51), id(cell_v_52), id(cell_v_53), id(cell_v_54), id(cell_v_55), id(cell_v_56), id(cell_v_57), id(cell_v_58), id(cell_v_59), id(cell_v_60), id(cell_v_61), id(cell_v_62), id(cell_v_63), id(cell_v_64), id(cell_v_65), id(cell_v_66), id(cell_v_67), id(cell_v_68), id(cell_v_69), id(cell_v_70), id(cell_v_71), id(cell_v_72), id(cell_v_73), id(cell_v_74), id(cell_v_75), id(cell_v_76), id(cell_v_77), id(cell_v_78), id(cell_v_79), id(cell_v_80), id(cell_v_81), id(cell_v_82), id(cell_v_83), id(cell_v_84), id(cell_v_85), id(cell_v_86), id(cell_v_87), id(cell_v_88), id(cell_v_89), id(cell_v_90), id(cell_v_91), id(cell_v_92), id(cell_v_93), id(cell_v_94), id(cell_v_95), id(cell_v_96), id(cell_v_97), id(cell_v_98), id(cell_v_99), id(cell_v_100), id(cell_v_101), id(cell_v_102), id(cell_v_103), id(cell_v_104), id(cell_v_105), id(cell_v_106), id(cell_v_107)};
+        id(cell_v_ids) = v;
+
     - light.turn_on:
         id: rgb_builtin
         brightness: 50%
@@ -19,6 +25,10 @@ esp32:
   variant: esp32s3
   framework:
     type: esp-idf
+
+psram:
+  mode: octal  # quad for N8R2 and octal for N16R8
+  speed: 80MHz
 
 # Enable logging
 logger:
@@ -46,75 +56,358 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password_can
+    password: !secret ota_password
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
 
+web_server:
+  #local: true
+  #log: false
+  version: 3
+  sorting_groups:
+    - id: group_cell_v
+      name: "Cell Voltages"
+      sorting_weight: 10
+
+debug:
+  update_interval: 10s
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      - if:
+          condition:
+            lambda: 'return id(device_last_restart).state == "";'
+          then:
+            - text_sensor.template.publish:
+                id: device_last_restart
+                state: !lambda 'return id(ha_time).now().strftime("%a %d %b %Y - %I:%M:%S %p");'
+
+globals:
+  - id: cell_v_ids
+    type: 'std::vector<sensor::Sensor*>' # compiles
+    restore_value: no
+  - id: can_frame_index_1cf
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: can_frame_index_118
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: can_keep_alive
+    type: int
+    restore_value: no
+    initial_value: '100'
+
+interval: 
+  - interval: 10ms
+    then:
+      if:
+        condition:
+          switch.is_on: digital_hvil
+        then:
+          - canbus.send:
+              can_id: 0x1CF
+              data: !lambda |-
+                int index = id(can_frame_index_1cf);
+                int max_index = 8;     
+                if (index >= max_index) index = 0;
+                else index++;     
+                id(can_frame_index_1cf) = index;
+
+                std::vector<uint8_t> can_data(8, 0x00);  // Initialize with 8 zeros
+                switch (index)
+                {
+                  case 0:
+                    can_data = {0x03, 0x22, 0x00, 0x04, 0x55, 0x55, 0x55, 0x55}; // request pack voltage
+                    break;
+                  case 1:
+                    can_data = {0x03, 0x22, 0x00, 0x05, 0x55, 0x55, 0x55, 0x55}; // request pack amps
+                    break;
+                  case 02:
+                    can_data = {0x03, 0x22, 0x00, 0x06, 0x55, 0x55, 0x55, 0x55}; // request pack health index
+                    break;
+                  case 3:
+                    can_data = {0x03, 0x22, 0x00, 0x07, 0x55, 0x55, 0x55, 0x55}; // request pack SOC
+                    break;
+                  case 4:
+                    can_data = {0x03, 0x22, 0x00, 0x08, 0x55, 0x55, 0x55, 0x55}; // request pack temperature max
+                    break;
+                  case 5:
+                    can_data = {0x03, 0x22, 0x00, 0x13, 0x55, 0x55, 0x55, 0x55}; // request voltage cell min number
+                    break;
+                  case 6:
+                    can_data = {0x03, 0x22, 0x00, 0x14, 0x55, 0x55, 0x55, 0x55}; // request voltage cell min
+                    break;
+                  case 7:
+                    can_data = {0x03, 0x22, 0x00, 0x15, 0x55, 0x55, 0x55, 0x55}; // request voltage cell max number
+                    break;
+                  case 8:
+                    can_data = {0x03, 0x22, 0x00, 0x16, 0x55, 0x55, 0x55, 0x55}; // request voltage cell max
+                    break;
+                }
+                return can_data;
+
+  - interval: 30ms
+    then:
+      - if:
+          condition:
+            switch.is_on: send_221_0x41
+          then:
+            - canbus.send: 
+                can_id: 0x221 #VC front ID
+                data: !lambda |-
+                  return {0x41, 0x11, 0x01, 0x00, 0x00, 0x00, 0x20, 0x96}; // stop drive mode
+      - if:
+          condition:
+            switch.is_on: send_221_0x61
+          then:
+  #          - canbus.send: 
+  #              can_id: 0x221 #VC front ID
+  #              data: !lambda |-
+  #                return {0x41, 0x11, 0x01, 0x00, 0x00, 0x00, 0x20, 0x96}; // stop drive mode
+            - canbus.send: 
+                can_id: 0x221 #VC front ID
+                data: !lambda |-
+                  return {0x61, 0x15, 0x01, 0x00, 0x00, 0x00, 0x20, 0xBA}; // HV Drive Mode
+
+
 canbus:
   - platform: esp32_can
     tx_pin: GPIO5
     rx_pin: GPIO6
-    can_id: 4
+    can_id: 4 #default send ID
     bit_rate: 500kbps
-    tx_queue_len: 5 # default is 5 I believe - 1 should make it drop extras?? 
-    rx_queue_len: 5
+    tx_queue_len: 15 # default is 5 I believe - 1 should make it drop extras?? 
+    rx_queue_len: 15
     on_frame:
       - can_id: 0x132 # BMS_hvBusStatus
         then:
-          - logger.log:
-              level: INFO
-              format: "0x132_BMS_hvBusStatus: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
-              args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
+        #  - logger.log:
+        #      level: INFO
+        #      format: "0x132_BMS_hvBusStatus: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
+        #      args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
 
           - lambda: |-
-              float BMS_packVoltage = ((x[1] << 8) | x[0]) * 0.01;                       //BMS_packVoltage: 0|16@1+ (0.01,0) [0|0] "V" X
-              ESP_LOGI("canbus", "BMS_packVoltage: %.02fV", BMS_packVoltage);
-              id(bms_packvoltage).publish_state(BMS_packVoltage);
+              float value = 0;
+              //int a = id(cell_v_0);
 
-              float BMS_packCurrent = int16_t((x[3] << 8) | x[2]);                       //BMS_packCurrent: 16|15@1- (-0.1,0) [0|0] "A" X             @1- means signed value = needs to be cast as int16_t
-              BMS_packCurrent = BMS_packCurrent * -0.1;
-              ESP_LOGI("canbus", "BMS_packCurrent: %.02fA", BMS_packCurrent);
-              id(bms_packcurrent).publish_state(BMS_packCurrent);
+              value = ((x[1] << 8) | x[0]) * 0.01;                       //BMS_packVoltage: 0|16@1+ (0.01,0) [0|0] "V" X
+              //ESP_LOGI("canbus", "BMS_packVoltage: %.02fV", value);
+              id(bms_packvoltage).publish_state(value);
 
-              float BMS_currentUnfiltered = int16_t(((x[5] << 8) | x[4]));               //BMS_currentUnfiltered: 32|16@1- (-0.05,822) [0|0] "A" X       822 is offset needs to be added to value
-              BMS_currentUnfiltered = (BMS_currentUnfiltered * -0.05) + 822;
-              ESP_LOGI("canbus", "BMS_)currentUnfiltered: %.02fA", BMS_currentUnfiltered);
-              id(bms_currentunfiltered).publish_state(BMS_currentUnfiltered);
+              value = int16_t((x[3] << 8) | x[2]) * -0.1;                       //BMS_packCurrent: 16|15@1- (-0.1,0) [0|0] "A" X
+              //ESP_LOGI("canbus", "BMS_packCurrent: %.02fA", value);
+              id(bms_packcurrent).publish_state(value);
 
-              float BMS_chgTimeToFull = (((x[7] & 0x0F) << 8) | x[6]) * 0.0166667;      //BMS_chgTimeToFull: 48|12@1+ (0.0166667,0) [0|0] "Hours" X
-              ESP_LOGI("canbus", "BMS_chgTimeToFull: %.02fh", BMS_chgTimeToFull);
-              id(bms_chgtimetofull).publish_state(BMS_chgTimeToFull);
+              value = (int16_t((x[5] << 8) | x[4]) * -0.05) + 822;                //BMS_currentUnfiltered: 32|16@1- (-0.05,822) [0|0] "A" X
+              //ESP_LOGI("canbus", "BMS_currentUnfiltered: %.02fA", value);
+              id(bms_currentunfiltered).publish_state(value);
+
+              value = (((x[7] & 0x0F) << 8) | x[6]) * 0.0166667;       //BMS_chgTimeToFull: 48|12@1+ (0.0166667,0) [0|0] "Hours" X
+              //ESP_LOGI("canbus", "BMS_chgTimeToFull: %.02fh", value);
+              id(bms_chgtimetofull).publish_state(value);
 
       - can_id: 0x292 # BMS_socStatus
         then:
-          - logger.log:
-              level: INFO
-              format: "0x292_BMS_socStatus: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
-              args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
-
           - lambda: |-
-              float BMS_socMin = (((x[1] & 0x03) << 8) | x[0]) / 10;                     //BMS_socMin: 0|10@1+ (0.1,0) [0|0] "%" X
-              ESP_LOGI("canbus", "BMS_socMin: %.02f%%", BMS_socMin);
-              id(bms_socmin).publish_state(BMS_socMin);
+              float value = 0;
 
-              float BMS_socUI = ((x[2] & 0x0F) << 6) | ((x[1] & 0xFC) >> 2);            //BMS_socUI: 10|10@1+ (0.1,0) [0|0] "%" X
-              BMS_socUI = BMS_socUI / 10; // scale
-              ESP_LOGI("canbus", "BMS_socUI: %.02f%%", BMS_socUI);
-              id(bms_socui).publish_state(BMS_socUI);
+              value = (((x[1] & 0x03) << 8) | x[0]) * 0.1; //BMS_socMin: 0|10@1+ (0.1,0) [0|0] "%" X
+              //ESP_LOGI("canbus", "BMS_socMin: %.02f%%", value);
+              id(bms_socmin).publish_state(value);
 
-              float BMS_socMax = (((x[3] & 0x3F) << 4) | ((x[2] & 0xF0) >> 4)) / 10;    //BMS_socMax: 20|10@1+ (0.1,0) [0|0] "%" X
-              ESP_LOGI("canbus", "BMS_socMax: %.02f%%", BMS_socMax);
-              id(bms_socmax).publish_state(BMS_socMax);
+              value = (((x[2] & 0x0F) << 6) | ((x[1] & 0xFC) >> 2)) * 0.1; //BMS_socUI: 10|10@1+ (0.1,0) [0|0] "%" X
+              //ESP_LOGI("canbus", "BMS_socUI: %.02f%%", value);
+              id(bms_socui).publish_state(value);
 
-              float BMS_socAvg = ((x[4] << 2) | ((x[3] & 0xC0) >> 6)) / 10;             //BMS_socAvg: 30|10@1+ (0.1,0) [0|0] "%" X
-              ESP_LOGI("canbus", "BMS_socAvg: %.02f%%", BMS_socAvg);
-              id(bms_socavg).publish_state(BMS_socAvg);
+              value = (((x[3] & 0x3F) << 4) | ((x[2] & 0xF0) >> 4)) * 0.1; //BMS_socMax: 20|10@1+ (0.1,0) [0|0] "%" X
+              //ESP_LOGI("canbus", "BMS_socMax: %.02f%%", value);
+              id(bms_socmax).publish_state(value);
 
-              float BMS_initialFullPackEnergy = (((x[6] & 0x03) << 8) | x[5]) / 10;     //BMS_initialFullPackEnergy: 40|10@1+ (0.1,0) [0|102.3] "kWh" X
-              ESP_LOGI("canbus", "BMS_socAvg: %.02fkWh", BMS_initialFullPackEnergy);
-              id(bms_initialfullpackenergy).publish_state(BMS_initialFullPackEnergy);
+              value = ((x[4] << 2) | ((x[3] & 0xC0) >> 6)) * 0.1; //BMS_socAvg: 30|10@1+ (0.1,0) [0|0] "%" X
+              //ESP_LOGI("canbus", "BMS_socAvg: %.02f%%", value);
+              id(bms_socavg).publish_state(value);
+
+              value = (((x[6] & 0x03) << 8) | x[5]) * 0.1; //BMS_initialFullPackEnergy: 40|10@1+ (0.1,0) [0|102.3] "kWh" X
+              //ESP_LOGI("canbus", "BMS_socAvg: %.02fkWh", value);
+              id(bms_initialfullpackenergy).publish_state(value);
+
+
+      - can_id: 0x20A # HVP_contactorState: 6 VEH
+        then:
+          - lambda: |-
+              uint8_t value = 0;
+              
+              //battery_packContNegativeState = (x[0] & 0x07); //HVP_fcContNegativeState: 12|3@1+ (1,0) [0|0] "" X
+              //battery_packContPositiveState = (x[0] & 0x38) >> 3; //HVP_fcContPositiveState: 16|3@1+ (1,0) [0|0] "" X
+              //battery_packContactorSetState = (x[1] & 0x0F); //HVP_packContactorSetState: 8|4@1+ (1,0) [0|0] "" X
+              //battery_packCtrsClosingAllowed = (x[4] & 0x08) >> 3; //HVP_packCtrsClosingAllowed: 37|1@1+ (1,0) [0|0] "" X
+              //hvp_pack_ctrs_closing_allowed = unpack_right_shift_u8(x[4], 5u, 0x20u); //HVP_packCtrsClosingAllowed: 37|1@1+ (1,0) [0|0] "" X
+              //battery_pyroTestInProgress = (x[4] & 0x20) >> 5; //HVP_pyroTestInProgress: 39|1@1+ (1,0) [0|0] "" X
+              //battery_hvil_status = (x[5] & 0x0F); //HVP_hvilStatus: 40|4@1+ (1,0) [0|0] "" X
+
+              static const char* contactorSetStateText[] = {"UNKNOWN(0)", "OPEN", "CLOSING", "BLOCKED", "OPENING", "CLOSED", "PARTIAL_WELD", "WELDED", "POSITIVE_CLOSED", "NEGATIVE_CLOSED", "UNKNOWN(10)", "UNKNOWN(11)", "UNKNOWN(12)"};
+              static const char* contactorStateText[] = {"SNA", "OPEN", "PRECHARGE", "BLOCKED", "PULLED_IN", "OPENING", "ECONOMIZED", "WELDED", "UNKNOWN(8)", "UNKNOWN(9)", "UNKNOWN(10)", "UNKNOWN(11)"};
+              static const char* hvilStatusText[] = {"UNKNOWN", "STATUS_OK", "CURRENT_SOURCE_FAULT", "INTERNAL_OPEN_FAULT", "VEHICLE_OPEN_FAULT", "PENTHOUSE_LID_OPEN_FAULT", "UNKNOWN_LOCATION_OPEN_FAULT", "VEHICLE_NODE_FAULT", "NO_12V_SUPPLY", "VEHICLE_OR_PENTHOUSE_LID_OPENFAULT", "UNKNOWN(10)", "UNKNOWN(11)", "UNKNOWN(12)", "UNKNOWN(13)", "UNKNOWN(14)", "UNKNOWN(15)"};
+              static const char* contactorsRequestStatusText[] = {"NOT_ACTIVE", "ACTIVE", "ACTIVE", "COMPLETED"};
+
+              value = (x[0] & 0x07);      //HVP_packContNegativeState: 0|3@1+ (1,0) [0|0] "" X 0 "SNA" 1 "OPEN" 2 "PRECHARGE" 3 "BLOCKED" 4 "PULLED_IN" 5 "OPENING" 6 "ECONOMIZED" 7 "WELDED";
+              id(hvp_pack_cont_negative_state).publish_state(contactorStateText[value]);
+              value = (x[0] & 0x38) >> 3; //HVP_packContPositiveState: 3|3@1+ (1,0) [0|0] "" X 0 "SNA" 1 "OPEN" 2 "PRECHARGE" 3 "BLOCKED" 4 "PULLED_IN" 5 "OPENING" 6 "ECONOMIZED" 7 "WELDED";
+              id(hvp_pack_cont_positive_state).publish_state(contactorStateText[value]);
+              value = (x[1] & 0x0f);      //HVP_packContactorSetState: 8|4@1+ (1,0) [0|0] "" X 0 "SNA" 1 "OPEN" 2 "CLOSING" 3 "BLOCKED" 4 "OPENING" 5 "CLOSED" 6 "PARTIAL_WELD" 7 "WELDED" 8 "POSITIVE_CLOSED" 9 "NEGATIVE_CLOSED";
+              id(hvp_pack_contactor_set_state).publish_state(contactorSetStateText[value]);
+              value = (x[1] & 0x70) >> 4; //HVP_fcContNegativeState: 12|3@1+ (1,0) [0|0] "" X 0 "SNA" 1 "OPEN" 2 "PRECHARGE" 3 "BLOCKED" 4 "PULLED_IN" 5 "OPENING" 6 "ECONOMIZED" 7 "WELDED"          
+              id(hvp_fc_cont_negative_state).publish_state(contactorStateText[value]);
+              value = (x[2] & 0x07);      //HVP_fcContPositiveState: 16|3@1+ (1,0) [0|0] "" X 0 "SNA" 1 "OPEN" 2 "PRECHARGE" 3 "BLOCKED" 4 "PULLED_IN" 5 "OPENING" 6 "ECONOMIZED" 7 "WELDED";
+              id(hvp_fc_cont_positive_state).publish_state(contactorStateText[value]);
+              value = (x[2] & 0x78) >> 3; //HVP_fcContactorSetState: 19|4@1+ (1,0) [0|0] "" X 0 "SNA" 1 "OPEN" 2 "CLOSING" 3 "BLOCKED" 4 "OPENING" 5 "CLOSED" 6 "PARTIAL_WELD" 7 "WELDED" 8 "POSITIVE_CLOSED" 9 "NEGATIVE_CLOSED";
+              id(hvp_fc_contactor_set_state).publish_state(contactorSetStateText[value]);
+              value = (x[3] & 0x03);      //HVP_fcCtrsRequestStatus: 24|2@1+ (1,0) [0|0] "" X 0 "NOT_ACTIVE" 1 "ACTIVE" 2 "COMPLETED";
+              id(hvp_fc_ctrs_request_status).publish_state(contactorsRequestStatusText[value]);
+              value = (x[3] & 0x04) >> 2; //HVP_fcCtrsResetRequestRequired: 26|1@1+ (1,0) [0|0] "" X
+              id(hvp_fc_ctrs_reset_request_required).publish_state(value); 
+              value = (x[3] & 0x08) >> 3; //HVP_fcCtrsOpenNowRequested: 27|1@1+ (1,0) [0|0] "" X
+              id(hvp_fc_ctrs_open_now_requested).publish_state(value); 
+              value = (x[3] & 0x10) >> 4; //HVP_fcCtrsOpenRequested: 28|1@1+ (1,0) [0|0] "" X
+              id(hvp_fc_ctrs_open_requested).publish_state(value); 
+              value = (x[3] & 0x20) >> 5; //HVP_fcCtrsClosingAllowed: 29|1@1+ (1,0) [0|0] "" X
+              id(hvp_fc_ctrs_closing_allowed).publish_state(value); 
+              value = (x[3] & 0x40) >> 6; //HVP_fcLinkAllowedToEnergizeAc: 30|1@1+ (1,0) [0|0] "" X
+              id(hvp_fc_link_allowed_to_energize_ac).publish_state(value); 
+              value = (x[3] & 0x80) >> 7; //HVP_fcLinkAllowedToEnergizeDc: 31|1@1+ (1,0) [0|0] "" X
+              id(hvp_fc_link_allowed_to_energize_dc).publish_state(value); 
+              value = (x[4] & 0x03);      //HVP_packCtrsRequestStatus: 32|2@1+ (1,0) [0|0] "" X "NOT_ACTIVE" 1 "ACTIVE" 2 "COMPLETED";
+              id(hvp_pack_ctrs_request_status).publish_state(contactorsRequestStatusText[value]);
+              value = (x[4] & 0x04) >> 2; //HVP_packCtrsResetRequestRequired: 34|1@1+ (1,0) [0|0] "" X
+              id(hvp_pack_ctrs_reset_request_required).publish_state(value); 
+              value = (x[4] & 0x08) >> 3; //HVP_packCtrsOpenNowRequested: 35|1@1+ (1,0) [0|0] "" X
+              id(hvp_pack_ctrs_open_now_requested).publish_state(value); 
+              value = (x[4] & 0x10) >> 4; //HVP_packCtrsOpenRequested: 36|1@1+ (1,0) [0|0] "" X
+              id(hvp_pack_ctrs_open_requested).publish_state(value); 
+              value = (x[4] & 0x20) >> 5; //HVP_packCtrsClosingAllowed: 37|1@1+ (1,0) [0|0] "" X
+              id(hvp_pack_ctrs_closing_allowed).publish_state(value); 
+              value = (x[4] & 0x40) >> 6; //HVP_dcLinkAllowedToEnergize: 38|1@1+ (1,0) [0|0] "" X
+              id(hvp_dc_link_allowed_to_energize).publish_state(value); 
+              value = (x[4] & 0x80) >> 7; //HVP_pyroTestInProgress: 39|1@1+ (1,0) [0|0] "" X
+              id(hvp_pyro_test_in_progress).publish_state(value); 
+              value = (x[5] & 0x0f);      //HVP_hvilStatus: 40|4@1+ (1,0) [0|0] "" X 0 "UNKNOWN" 1 "STATUS_OK" 2 "CURRENT_SOURCE_FAULT" 3 "INTERNAL_OPEN_FAULT" 4 "VEHICLE_OPEN_FAULT" 5 "PENTHOUSE_LID_OPEN_FAULT" 6 "UNKNOWN_LOCATION_OPEN_FAULT" 7 "VEHICLE_NODE_FAULT" 8 "NO_12V_SUPPLY" 9 "VEHICLE_OR_PENTHOUSE_LID_OPENFAULT";;
+              id(hvp_hvil_status).publish_state(hvilStatusText[value]);
+
+      - can_id: 0x332 # BMS_bmbMinMax
+        then:
+          - lambda: |-
+              float value = 0;
+              uint8_t mux = (x[0] & 0x03);
+
+              if (mux == 1)  //Cell voltages
+              {
+                
+                value = ((x[1] << 6) | (x[0] >> 2)) * 0.002; //BMS_brickVoltageMax m1: 2|12@1+ (0.002,0) [0|0] "V" X
+                id(bms_brickvoltagemax).publish_state(value); 
+
+                value = ((x[3] << 8) | x[2]) * 0.002; //BMS_brickVoltageMin m1: 16|12@1+ (0.002,0) [0|0] "V" X
+                id(bms_brickvoltagemin).publish_state(value); 
+
+                value = 1 + (x[4] & 0x7F); //BMS_brickNumVoltageMax m1: 32|7@1+ (1,1) [0|0] "" X
+                id(bms_bricknumvoltagemax).publish_state(value); 
+
+                value = 1 + (x[5] & 0x7F); //BMS_brickNumVoltageMin m1: 40|7@1+ (1,1) [0|0] "" X
+                id(bms_bricknumvoltagemin).publish_state(value); 
+              }
+              if (mux == 0)  //Temperature sensors
+              {
+                value = (x[2] * 0.5) - 40; //BMS_thermistorTMax m0: 16|8@1+ (0.5,-40) [0|0] "DegC" X 
+                id(bms_thermistortmax).publish_state(value); 
+
+                value = (x[3] * 0.5) - 40; //BMS_thermistorTMin m0: 24|8@1+ (0.5,-40) [0|0] "DegC" X
+                id(bms_thermistortmin).publish_state(value); 
+              }
+
+#              BMS_thermistorNumTMax m0: 2|4@1+ (1,0) [0|0] "" X
+#              BMS_thermistorNumTMin m0: 8|4@1+ (1,0) [0|0] "" X
+#              BMS_modelTMax m0: 32|8@1+ (0.5,-40) [0|0] "DegC" X
+#              BMS_modelTMin m0: 40|8@1+ (0.5,-40) [0|0] "DegC" X
+
+      - can_id: 0x352 # BMS_energyStatus
+        then:
+          - lambda: |-
+              float value = 0;
+              uint8_t mux = (x[0] & 0x03); //BMS_energyStatusIndex M : 0|2@1+ (1,0) [0|0] "" X
+
+              if (mux == 0) // Mux 0
+              {
+                value = ((x[3] << 8) | x[2]) * 0.02;  //BMS_nominalFullPackEnergy m0 : 16|16@1+ (0.02,0) [0|0] "kWh" X
+                id(bms_nominalfullpackenergy).publish_state(value); 
+                value = ((x[5] << 8) | x[4]) * 0.02;  //BMS_nominalEnergyRemaining m0 : 32|16@1+ (0.02,0) [0|0] "kWh" X
+                id(bms_nominalenergyremaining).publish_state(value); 
+                value = ((x[7] << 8) | x[6]) * 0.02;  //BMS_idealEnergyRemaining m0 : 48|16@1+ (0.02,0) [0|0] "kWh" X
+                id(bms_idealenergyremaining).publish_state(value); 
+              }
+              if (mux == 1)
+              {
+                value = ((x[1] & 0x80) >> 7); //BMS_fullyCharged m1 : 15|1@1+ (1,0) [0|1] "" X - May not be correct need to do a test
+                id(bms_fullycharged).publish_state(value); 
+                value = ((x[3] << 8) | x[2]) * 0.01;  //BMS_energyBuffer m1 : 16|16@1+ (0.01,0) [0|0] "kWh" X
+                id(bms_energybuffer).publish_state(value); 
+                value = ((x[5] << 8) | x[4]) * 0.02;  //BMS_expectedEnergyRemaining m1 : 32|16@1+ (0.02,0) [0|0] "kWh" X
+                id(bms_expectedenergyremaining).publish_state(value); 
+                value = ((x[7] << 8) | x[6]) * 0.02;  //BMS_energyToChargeComplete m1 : 48|16@1+ (0.02,0) [0|0] "kWh" X
+                id(bms_energytochargecomplete).publish_state(value); 
+              }
+
+
+      - can_id: 0x3D2 # 978 BMS_kwhCounter: 8 VEH
+        then:
+          - lambda: |-
+              uint32_t value = 0;
+              value = ((x[3] << 24) | (x[2] << 16) | (x[1] << 8) | x[0]) * 0.001; //BMS_kwhDischargeTotal: 0|32@1+ (0.001,0) [0|0] "KWh" X
+              id(bms_kwhdischargetotal).publish_state(value); 
+              value = ((x[7] << 24) | (x[6] << 16) | (x[5] << 8) | x[4]) * 0.001; //BMS_kwhChargeTotal: 32|32@1+ (0.001,0) [0|0] "KWh" X
+              id(bms_kwhchargetotal).publish_state(value); 
+
+      - can_id: 0x401 # 1025 BMS_brickVoltages: 8 VEH
+        then:
+          - lambda: |-
+              uint8_t mux = (x[0]);
+
+              float volts;
+              static uint8_t mux_zero_counter = 0u;
+              static uint8_t mux_max = 0u;
+
+              if (x[1] == 0x2A)  // status byte must be 0x2A to read cellvoltages
+              {
+                volts = ((x[3] << 8) | x[2]) * 0.0001;  // BMS_brick0 m0 : 16|16@1+ (0.0001,0) [0|0] "V"  Receiver
+                id(cell_v_ids)[mux * 3]->publish_state(volts); // 
+
+                volts = ((x[5] << 8) | x[4]) * 0.0001;
+                id(cell_v_ids)[1 + mux * 3]->publish_state(volts);
+
+                volts = ((x[7] << 8) | x[6]) * 0.0001;
+                id(cell_v_ids)[2 + mux * 3]->publish_state(volts);
+
+                // Track the max value of mux. If we've seen two 0 values for mux, we've probably gathered all
+                // cell voltages. Then, 2 + mux_max * 3 + 1 is the number of cell voltages.
+                //mux_max = (mux > mux_max) ? mux : mux_max;
+                //if (mux_zero_counter < 2 && mux == 0u) {
+                //  mux_zero_counter++;
+                  //if (mux_zero_counter == 2u) {
+                    // The max index will be 2 + mux_max * 3 (see above), so "+ 1" for the number of cells
+                    //datalayer.battery.info.number_of_cells = 2 + 3 * mux_max + 1;
+                    // Increase the counter arbitrarily another time to make the initial if-statement evaluate to false
+                 //   mux_zero_counter++;
+                 // }
+                //}//
+              }
+
+
+
+
 
 #      - can_id: 0  # listen to all messages
 #        can_id_mask: 0
@@ -127,18 +420,138 @@ canbus:
 #          - lambda: |-
 #              ESP_LOGD("canbus", "can_id: 0x%03x, length: %d, content: %s", can_id, x.size(), format_hex_pretty(x).c_str());
 
+
+#      - can_id: 0x221
+ #       then:
+ #         - logger.log:
+#              level: INFO
+#              format: "ID221VCFRONT_LVPowerState: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
+#              args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
+
+#      - can_id: 0x3aa
+#        then:
+#          - logger.log:
+#              level: INFO
+#              format: "HVP_alertMatrix1: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x"
+#              args: [ '(uint)x[0]', '(uint)x[1]', '(uint)x[2]', '(uint)x[3]', '(uint)x[4]', '(uint)x[5]', '(uint)x[6]', '(uint)x[7]' ]
+
+          #- lambda: |-
+          #    id(txt_can_logging).publish_state(format_hex_pretty(x).c_str());
+
+
+
+
+switch:
+  - platform: template
+    name: Close Contactors
+    id: close_contactors
+    optimistic: True
+  - platform: template
+    name: Digital HVIL
+    id: digital_hvil
+    optimistic: True
+  - platform: template
+    name: CAN Send ID 0x221 0x61
+    id: send_221_0x61
+    optimistic: True
+  - platform: template
+    name: CAN Send ID 0x221 0x41
+    id: send_221_0x41
+    optimistic: True
+
 text_sensor:
+  - platform: template
+    name: "HVP_packContNegativeState"
+    id: hvp_pack_cont_negative_state
+  - platform: template
+    name: "HVP_packContPositiveState"
+    id: hvp_pack_cont_positive_state
+  - platform: template
+    name: "HVP_packContactorSetState"
+    id: hvp_pack_contactor_set_state
+  - platform: template
+    name: "HVP_fcContNegativeState"
+    id: hvp_fc_cont_negative_state
+  - platform: template
+    name: "HVP_fcContPositiveState"
+    id: hvp_fc_cont_positive_state
+  - platform: template
+    name: "HVP_fcContactorSetState"
+    id: hvp_fc_contactor_set_state
+  - platform: template
+    name: "HVP_fcCtrsRequestStatus"
+    id: hvp_fc_ctrs_request_status
+  - platform: template
+    name: "HVP_packCtrsRequestStatus"
+    id: hvp_pack_ctrs_request_status
+  - platform: template
+    name: "HVP_hvilStatus"
+    id: hvp_hvil_status
+
   - platform: template
     name: "CAN Logging CSV"
     id: txt_can_logging
 
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
+
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+    ssid:
+      name: "Connected SSID"
+      entity_category: diagnostic
+    mac_address:
+      name: "Mac Address"
+      entity_category: diagnostic
+
+  - platform: template
+    name: 'Last Restart'
+    id: device_last_restart
+    icon: mdi:clock
+    entity_category: diagnostic
+
 sensor:
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: diagnostic
+    internal: true
+
+  - platform: uptime
+    name: Uptime Counter
+    id: uptime_counter
+    update_interval: 1s
+    accuracy_decimals: 0
+
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    loop_time:
+      name: "Loop Time"
+    psram:
+      name: "Free PSRAM"
+
+  - platform: template
+    name: Debug Sensor
+    id: debug_sensor
+
   - platform: template
     name: BMS_socUI
     id: bms_socui
     accuracy_decimals: 2
     device_class: battery
     unit_of_measurement: "%"
+    filters:
+      - throttle: 10s
 
   - platform: template
     name: BMS_socMin
@@ -146,6 +559,8 @@ sensor:
     accuracy_decimals: 2
     device_class: battery
     unit_of_measurement: "%"
+    filters:
+      - throttle: 10s
 
   - platform: template
     name: BMS_socMax
@@ -153,6 +568,8 @@ sensor:
     accuracy_decimals: 2
     device_class: battery
     unit_of_measurement: "%"
+    filters:
+      - throttle: 10s
 
   - platform: template
     name: BMS_socAvg
@@ -160,6 +577,8 @@ sensor:
     accuracy_decimals: 2
     device_class: battery
     unit_of_measurement: "%"
+    filters:
+      - throttle: 10s
 
   - platform: template
     name: BMS_initialFullPackEnergy
@@ -167,6 +586,8 @@ sensor:
     accuracy_decimals: 2
     device_class: energy
     unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
 
   - platform: template
     name: BMS_packVoltage
@@ -201,8 +622,286 @@ sensor:
     accuracy_decimals: 2
     unit_of_measurement: "h"  
     filters:
-      - throttle_average: 1s
-  
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_brickVoltageMax
+    id: bms_brickvoltagemax
+    accuracy_decimals: 3
+    device_class: voltage
+    unit_of_measurement: "V"
+    filters:
+      - throttle: 5s
+
+  - platform: template
+    name: BMS_brickVoltageMin
+    id: bms_brickvoltagemin
+    accuracy_decimals: 3
+    device_class: voltage
+    unit_of_measurement: "V"
+    filters:
+      - throttle: 5s
+
+  - platform: template
+    name: BMS_brickNumVoltageMax
+    id: bms_bricknumvoltagemax
+    accuracy_decimals: 0
+    filters:
+      - throttle: 5s
+
+  - platform: template
+    name: BMS_brickNumVoltageMin
+    id: bms_bricknumvoltagemin
+    accuracy_decimals: 0
+    filters:
+      - throttle: 5s
+
+  - platform: template
+    name: BMS_thermistorTMax
+    id: bms_thermistortmax
+    accuracy_decimals: 1
+    device_class: temperature
+    unit_of_measurement: "C"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_thermistorTMin
+    id: bms_thermistortmin
+    accuracy_decimals: 1
+    device_class: temperature
+    unit_of_measurement: "C"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_nominalFullPackEnergy
+    id: bms_nominalfullpackenergy
+    accuracy_decimals: 2
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_nominalEnergyRemaining
+    id: bms_nominalenergyremaining
+    accuracy_decimals: 2
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_idealEnergyRemaining
+    id: bms_idealenergyremaining
+    accuracy_decimals: 2
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_energyBuffer
+    id: bms_energybuffer
+    accuracy_decimals: 2
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_expectedEnergyRemaining
+    id: bms_expectedenergyremaining
+    accuracy_decimals: 2
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_energyToChargeComplete
+    id: bms_energytochargecomplete
+    accuracy_decimals: 2
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_kwhDischargeTotal
+    id: bms_kwhdischargetotal
+    accuracy_decimals: 0
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+  - platform: template
+    name: BMS_kwhChargeTotal
+    id: bms_kwhchargetotal
+    accuracy_decimals: 0
+    device_class: energy
+    unit_of_measurement: "kWh"
+    filters:
+      - throttle: 60s
+
+################################################ CELL VOLTAGES ###########################
+  - { platform: template, name: Cell V 0, id: cell_v_0, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 1 } }
+  - { platform: template, name: Cell V 1, id: cell_v_1, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 2 } }
+  - { platform: template, name: Cell V 2, id: cell_v_2, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 3 } }
+  - { platform: template, name: Cell V 3, id: cell_v_3, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 4 } }
+  - { platform: template, name: Cell V 4, id: cell_v_4, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 5 } }
+  - { platform: template, name: Cell V 5, id: cell_v_5, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 6 } }
+  - { platform: template, name: Cell V 6, id: cell_v_6, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 7 } }
+  - { platform: template, name: Cell V 7, id: cell_v_7, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 8 } }
+  - { platform: template, name: Cell V 8, id: cell_v_8, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 9 } }
+  - { platform: template, name: Cell V 9, id: cell_v_9, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 10 } }
+  - { platform: template, name: Cell V 10, id: cell_v_10, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 11 } }
+  - { platform: template, name: Cell V 11, id: cell_v_11, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 12 } }
+  - { platform: template, name: Cell V 12, id: cell_v_12, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 13 } }
+  - { platform: template, name: Cell V 13, id: cell_v_13, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 14 } }
+  - { platform: template, name: Cell V 14, id: cell_v_14, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 15 } }
+  - { platform: template, name: Cell V 15, id: cell_v_15, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 16 } }
+  - { platform: template, name: Cell V 16, id: cell_v_16, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 17 } }
+  - { platform: template, name: Cell V 17, id: cell_v_17, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 18 } }
+  - { platform: template, name: Cell V 18, id: cell_v_18, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 19 } }
+  - { platform: template, name: Cell V 19, id: cell_v_19, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 20 } }
+  - { platform: template, name: Cell V 20, id: cell_v_20, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 21 } }
+  - { platform: template, name: Cell V 21, id: cell_v_21, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 22 } }
+  - { platform: template, name: Cell V 22, id: cell_v_22, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 23 } }
+  - { platform: template, name: Cell V 23, id: cell_v_23, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 24 } }
+  - { platform: template, name: Cell V 24, id: cell_v_24, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 25 } }
+  - { platform: template, name: Cell V 25, id: cell_v_25, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 26 } }
+  - { platform: template, name: Cell V 26, id: cell_v_26, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 27 } }
+  - { platform: template, name: Cell V 27, id: cell_v_27, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 28 } }
+  - { platform: template, name: Cell V 28, id: cell_v_28, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 29 } }
+  - { platform: template, name: Cell V 29, id: cell_v_29, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 30 } }
+  - { platform: template, name: Cell V 30, id: cell_v_30, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 31 } }
+  - { platform: template, name: Cell V 31, id: cell_v_31, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 32 } }
+  - { platform: template, name: Cell V 32, id: cell_v_32, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 33 } }
+  - { platform: template, name: Cell V 33, id: cell_v_33, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 34 } }
+  - { platform: template, name: Cell V 34, id: cell_v_34, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 35 } }
+  - { platform: template, name: Cell V 35, id: cell_v_35, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 36 } }
+  - { platform: template, name: Cell V 36, id: cell_v_36, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 37 } }
+  - { platform: template, name: Cell V 37, id: cell_v_37, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 38 } }
+  - { platform: template, name: Cell V 38, id: cell_v_38, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 39 } }
+  - { platform: template, name: Cell V 39, id: cell_v_39, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 40 } }
+  - { platform: template, name: Cell V 40, id: cell_v_40, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 41 } }
+  - { platform: template, name: Cell V 41, id: cell_v_41, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 42 } }
+  - { platform: template, name: Cell V 42, id: cell_v_42, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 43 } }
+  - { platform: template, name: Cell V 43, id: cell_v_43, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 44 } }
+  - { platform: template, name: Cell V 44, id: cell_v_44, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 45 } }
+  - { platform: template, name: Cell V 45, id: cell_v_45, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 46 } }
+  - { platform: template, name: Cell V 46, id: cell_v_46, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 47 } }
+  - { platform: template, name: Cell V 47, id: cell_v_47, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 48 } }
+  - { platform: template, name: Cell V 48, id: cell_v_48, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 49 } }
+  - { platform: template, name: Cell V 49, id: cell_v_49, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 50 } }
+  - { platform: template, name: Cell V 50, id: cell_v_50, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 51 } }
+  - { platform: template, name: Cell V 51, id: cell_v_51, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 52 } }
+  - { platform: template, name: Cell V 52, id: cell_v_52, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 53 } }
+  - { platform: template, name: Cell V 53, id: cell_v_53, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 54 } }
+  - { platform: template, name: Cell V 54, id: cell_v_54, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 55 } }
+  - { platform: template, name: Cell V 55, id: cell_v_55, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 56 } }
+  - { platform: template, name: Cell V 56, id: cell_v_56, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 57 } }
+  - { platform: template, name: Cell V 57, id: cell_v_57, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 58 } }
+  - { platform: template, name: Cell V 58, id: cell_v_58, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 59 } }
+  - { platform: template, name: Cell V 59, id: cell_v_59, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 60 } }
+  - { platform: template, name: Cell V 60, id: cell_v_60, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 61 } }
+  - { platform: template, name: Cell V 61, id: cell_v_61, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 62 } }
+  - { platform: template, name: Cell V 62, id: cell_v_62, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 63 } }
+  - { platform: template, name: Cell V 63, id: cell_v_63, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 64 } }
+  - { platform: template, name: Cell V 64, id: cell_v_64, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 65 } }
+  - { platform: template, name: Cell V 65, id: cell_v_65, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 66 } }
+  - { platform: template, name: Cell V 66, id: cell_v_66, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 67 } }
+  - { platform: template, name: Cell V 67, id: cell_v_67, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 68 } }
+  - { platform: template, name: Cell V 68, id: cell_v_68, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 69 } }
+  - { platform: template, name: Cell V 69, id: cell_v_69, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 70 } }
+  - { platform: template, name: Cell V 70, id: cell_v_70, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 71 } }
+  - { platform: template, name: Cell V 71, id: cell_v_71, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 72 } }
+  - { platform: template, name: Cell V 72, id: cell_v_72, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 73 } }
+  - { platform: template, name: Cell V 73, id: cell_v_73, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 74 } }
+  - { platform: template, name: Cell V 74, id: cell_v_74, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 75 } }
+  - { platform: template, name: Cell V 75, id: cell_v_75, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 76 } }
+  - { platform: template, name: Cell V 76, id: cell_v_76, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 77 } }
+  - { platform: template, name: Cell V 77, id: cell_v_77, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 78 } }
+  - { platform: template, name: Cell V 78, id: cell_v_78, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 79 } }
+  - { platform: template, name: Cell V 79, id: cell_v_79, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 80 } }
+  - { platform: template, name: Cell V 80, id: cell_v_80, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 81 } }
+  - { platform: template, name: Cell V 81, id: cell_v_81, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 82 } }
+  - { platform: template, name: Cell V 82, id: cell_v_82, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 83 } }
+  - { platform: template, name: Cell V 83, id: cell_v_83, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 84 } }
+  - { platform: template, name: Cell V 84, id: cell_v_84, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 85 } }
+  - { platform: template, name: Cell V 85, id: cell_v_85, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 86 } }
+  - { platform: template, name: Cell V 86, id: cell_v_86, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 87 } }
+  - { platform: template, name: Cell V 87, id: cell_v_87, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 88 } }
+  - { platform: template, name: Cell V 88, id: cell_v_88, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 89 } }
+  - { platform: template, name: Cell V 89, id: cell_v_89, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 90 } }
+  - { platform: template, name: Cell V 90, id: cell_v_90, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 91 } }
+  - { platform: template, name: Cell V 91, id: cell_v_91, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 92 } }
+  - { platform: template, name: Cell V 92, id: cell_v_92, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 93 } }
+  - { platform: template, name: Cell V 93, id: cell_v_93, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 94 } }
+  - { platform: template, name: Cell V 94, id: cell_v_94, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 95 } }
+  - { platform: template, name: Cell V 95, id: cell_v_95, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 96 } }
+  - { platform: template, name: Cell V 96, id: cell_v_96, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 97 } }
+  - { platform: template, name: Cell V 97, id: cell_v_97, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 98 } }
+  - { platform: template, name: Cell V 98, id: cell_v_98, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 99 } }
+  - { platform: template, name: Cell V 99, id: cell_v_99, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 100 } }
+  - { platform: template, name: Cell V 100, id: cell_v_100, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 101 } }
+  - { platform: template, name: Cell V 101, id: cell_v_101, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 102 } }
+  - { platform: template, name: Cell V 102, id: cell_v_102, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 103 } }
+  - { platform: template, name: Cell V 103, id: cell_v_103, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 104 } }
+  - { platform: template, name: Cell V 104, id: cell_v_104, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 105 } }
+  - { platform: template, name: Cell V 105, id: cell_v_105, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 106 } }
+  - { platform: template, name: Cell V 106, id: cell_v_106, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 107 } }
+  - { platform: template, name: Cell V 107, id: cell_v_107, accuracy_decimals: 3, device_class: voltage, unit_of_measurement: "V", state_class: measurement, web_server: { sorting_group_id: group_cell_v, sorting_weight: 108 } }
+
+binary_sensor:
+  - platform: template
+    name: BMS_fullyCharged
+    id: bms_fullycharged
+
+  - platform: template
+    name: HVP_fcCtrsResetRequestRequired
+    id: hvp_fc_ctrs_reset_request_required
+  - platform: template
+    name: HVP_fcCtrsOpenNowRequested
+    id: hvp_fc_ctrs_open_now_requested
+  - platform: template
+    name: HVP_fcCtrsOpenRequested
+    id: hvp_fc_ctrs_open_requested
+
+  - platform: template
+    name: HVP_fcCtrsClosingAllowed
+    id: hvp_fc_ctrs_closing_allowed
+  - platform: template
+    name: HVP_fcLinkAllowedToEnergizeAc
+    id: hvp_fc_link_allowed_to_energize_ac
+  - platform: template
+    name: HVP_fcLinkAllowedToEnergizeDc
+    id: hvp_fc_link_allowed_to_energize_dc
+
+  - platform: template
+    name: HVP_packCtrsResetRequestRequired
+    id: hvp_pack_ctrs_reset_request_required
+  - platform: template
+    name: HVP_packCtrsOpenNowRequested
+    id: hvp_pack_ctrs_open_now_requested
+  - platform: template
+    name: HVP_packCtrsOpenRequested
+    id: hvp_pack_ctrs_open_requested
+
+  - platform: template
+    name: HVP_packCtrsClosingAllowed
+    id: hvp_pack_ctrs_closing_allowed
+  - platform: template
+    name: HVP_dcLinkAllowedToEnergize
+    id: hvp_dc_link_allowed_to_energize
+  - platform: template
+    name: HVP_pyroTestInProgress
+    id: hvp_pyro_test_in_progress
+
+
 light:
   - platform: esp32_rmt_led_strip # ESP32 S3 Atom Builtin RGB LED
     rgb_order: GRB
