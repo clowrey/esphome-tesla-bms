@@ -8,3 +8,9 @@ All the values and names are from the tesla vehicle DBC files like this one http
 
 The code is currently running on the highlighted ESP32-S3 M5stack Atom S3 + Atomic CAN Base
 ![image](https://github.com/user-attachments/assets/54c83695-129e-4845-a635-828e6e4fcedd)
+
+https://github.com/cantools/cantools is great for generating the required decoding logic 
+once installed you can run:
+```
+ cantools generate_c_source something.dbc
+```
